@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ISS Live Tracker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700&family=Nunito+Sans:wght@400;600&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<div class="loading-overlay" id="loader">
+  <div class="loader-ring"></div>
+  <div class="loader-text">Acquiring ISS signal…</div>
+</div>
+
+<div class="slow-msg" id="slow-msg">
+  Taking a little longer than usual — hang tight…
+</div>
+
+<header>
+  <span class="live-dot"></span>
+  <h1>ISS Live Tracker</h1>
+  <div class="header-right">
+    <span id="update-time"></span>
+    <button class="theme-btn" onclick="toggleTheme()">
+      <span id="theme-emoji">☀️</span>
+      <span id="theme-label">Light</span>
+    </button>
+    <button class="sidebar-btn" onclick="toggleSidebar()">
+      <span id="sb-emoji">◀</span>
+      <span id="sb-label">Hide Panel</span>
+    </button>
+  </div>
+</header>
+
+<div class="layout">
+
+  <aside class="sidebar" id="sidebar">
+
+    <div class="card">
+      <div class="card-label">Live Orbit</div>
+      <div class="orbit-wrap">
+        <div class="orbit-scene">
+          <div class="orbit-ring"></div>
+          <div class="earth-ball">🌍</div>
+          <div class="iss-orbit">
+            <!-- ══════════════════════════════════════
+                 ONLY image in the whole project.
+                 Put your file at:  images/iss.png
+                 That's it — nothing else to change.
+            ══════════════════════════════════════ -->
+            <img src="images/iss.png" alt="ISS" id="iss-orbit-img"/>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Position</div>
+      <div class="coord-row">
+        <div class="coord-box">
+          <div class="c-label">Latitude</div>
+          <div class="c-val" id="lat-value">—</div>
+        </div>
+        <div class="coord-box">
+          <div class="c-label">Longitude</div>
+          <div class="c-val" id="long-value">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Telemetry</div>
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="s-label">Altitude</div>
+          <div class="s-val c-blue" id="altitude-val">—</div>
+          <div class="s-unit">km above Earth</div>
+        </div>
+        <div class="stat">
+          <div class="s-label">Velocity</div>
+          <div class="s-val c-green" id="velocity-val">—</div>
+          <div class="s-unit">km/h</div>
+        </div>
+        <div class="stat">
+          <div class="s-label">Footprint</div>
+          <div class="s-val c-amber" id="footprint-val">—</div>
+          <div class="s-unit">km diameter</div>
+        </div>
+        <div class="stat">
+          <div class="s-label">Daylight</div>
+          <div class="s-val" id="visibility-val">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">
+        Crew Aboard <span id="crew-count" style="color:var(--accent)"></span>
+      </div>
+      <div class="crew-list" id="crew-list">
+        <div class="muted-note">Loading crew…</div>
+      </div>
+      <div id="crew-error" class="muted-note" style="display:none;margin-top:.5rem;">
+        Crew data unavailable (API is HTTP-only, blocked on HTTPS sites).
+      </div>
+    </div>
+
+    <div class="error-banner" id="error-banner">
+      Can't reach the ISS API right now. Retrying…
+    </div>
+
+  </aside>
+
+  <div class="map-wrap">
+    <div id="map"></div>
+
+    <!-- HUD: only shows when sidebar is closed -->
+    <div class="mini-hud" id="mini-hud">
+      <div class="hud-row">
+        <span class="hud-icon">🛰</span>
+        <span class="hud-title">ISS right now</span>
+        <span id="hud-vis"></span>
+      </div>
+      <div class="hud-coords">
+        <span id="mh-lat">—</span>
+        <span class="hud-sep">,</span>
+        <span id="mh-lng">—</span>
+      </div>
+      <div class="hud-stats">
+        <div class="hud-stat">
+          <span class="hud-stat-val" id="mh-alt">—</span>
+          <span class="hud-stat-label">km up</span>
+        </div>
+        <div class="hud-divider"></div>
+        <div class="hud-stat">
+          <span class="hud-stat-val" id="mh-vel">—</span>
+          <span class="hud-stat-label">km/h</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ══════════════════════════
+   CONFIG — only thing to edit
+   ══════════════════════════ */
+const ISS_IMAGE = 'images/iss.png'; // your one ISS image file
+/* ══════════════════════════ */
+
+const ISS_API  = 'https://api.wheretheiss.at/v1/satellites/25544';
+const CREW_API = 'http://api.open-notify.org/astros.json';
+
+let map, issMarker, pathLine;
+const pathCoords = [];
+const MAX_PATH   = 150;
+let firstLoad    = true;
+let slowTimer    = null;
+let sidebarOpen  = true;
+
+function initMap() {
+  map = L.map('map', { zoomControl: true });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors', maxZoom: 12
+  }).addTo(map);
+  map.setView([0, 0], 2);
+
+  const icon = L.divIcon({
+    html: `<img src="${ISS_IMAGE}" alt="ISS" style="width:32px;height:32px;filter:drop-shadow(0 0 6px rgba(79,195,247,.9))"/>`,
+    className: '', iconSize: [32,32], iconAnchor: [16,16]
+  });
+  issMarker = L.marker([0,0], { icon }).addTo(map);
+  pathLine  = L.polyline([], { color:'#4fc3f7', weight:2, opacity:.45, dashArray:'5 7' }).addTo(map);
+}
+
+function startSlowTimer() {
+  slowTimer = setTimeout(() => {
+    const el = document.getElementById('slow-msg');
+    el.classList.add('visible');
+    setTimeout(() => el.classList.remove('visible'), 4500);
+  }, 3000);
+}
+function clearSlowTimer() {
+  if (slowTimer) { clearTimeout(slowTimer); slowTimer = null; }
+}
+
+function updateLocation(r) {
+  clearSlowTimer();
+  const lat  = parseFloat(r.latitude.toFixed(4));
+  const lng  = parseFloat(r.longitude.toFixed(4));
+  const alt  = r.altitude.toFixed(1);
+  const vel  = Math.round(r.velocity).toLocaleString();
+  const foot = Math.round(r.footprint).toLocaleString();
+  const vis  = r.visibility;
+
+  document.getElementById('lat-value').textContent     = lat + '°';
+  document.getElementById('long-value').textContent    = lng + '°';
+  document.getElementById('altitude-val').textContent  = alt;
+  document.getElementById('velocity-val').textContent  = vel;
+  document.getElementById('footprint-val').textContent = foot;
+  document.getElementById('visibility-val').textContent = vis === 'daylight' ? '☀️ Day' : '🌑 Night';
+
+  // HUD
+  document.getElementById('mh-lat').textContent  = lat + '°';
+  document.getElementById('mh-lng').textContent  = lng + '°';
+  document.getElementById('mh-alt').textContent  = alt;
+  document.getElementById('mh-vel').textContent  = vel;
+  document.getElementById('hud-vis').textContent = vis === 'daylight' ? '☀️' : '🌑';
+
+  document.getElementById('update-time').textContent =
+    new Date(r.timestamp * 1000).toUTCString();
+
+  issMarker.setLatLng([lat, lng]);
+  issMarker.bindPopup(`ISS &mdash; ${lat}°, ${lng}°<br>${alt} km up &bull; ${vel} km/h`);
+  pathCoords.push([lat, lng]);
+  if (pathCoords.length > MAX_PATH) pathCoords.shift();
+  pathLine.setLatLngs(pathCoords);
+
+  if (firstLoad) {
+    map.setView([lat, lng], 3);
+    firstLoad = false;
+    document.getElementById('loader').classList.add('hidden');
+  }
+  document.getElementById('error-banner').style.display = 'none';
+}
+
+function sendRequest() {
+  startSlowTimer();
+  fetch(ISS_API)
+    .then(r => r.json()).then(updateLocation)
+    .catch(() => {
+      clearSlowTimer();
+      document.getElementById('error-banner').style.display = 'block';
+      document.getElementById('loader').classList.add('hidden');
+    });
+}
+
+function loadCrew() {
+  fetch(CREW_API)
+    .then(r => r.json())
+    .then(data => {
+      const iss = data.people.filter(p => p.craft === 'ISS');
+      document.getElementById('crew-count').textContent = '(' + iss.length + ')';
+      const colors = ['#4fc3f7','#7c4dff','#00e676','#ffab40','#f06292','#80cbc4'];
+      document.getElementById('crew-list').innerHTML = iss.map((p,i) => {
+        const initials = p.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase();
+        return `<div class="crew-member">
+          <div class="crew-avatar" style="background:${colors[i%colors.length]}">${initials}</div>
+          <div>
+            <div class="crew-name">${p.name}</div>
+            <div class="crew-craft">${p.craft}</div>
+          </div>
+        </div>`;
+      }).join('') || '<div class="muted-note">No crew data</div>';
+    })
+    .catch(() => {
+      document.getElementById('crew-list').innerHTML = '';
+      document.getElementById('crew-error').style.display = 'block';
+    });
+}
+
+function toggleTheme() {
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark');
+  document.getElementById('theme-emoji').textContent = dark ? '🌙' : '☀️';
+  document.getElementById('theme-label').textContent = dark ? 'Dark'  : 'Light';
+}
+
+function toggleSidebar() {
+  sidebarOpen = !sidebarOpen;
+  document.getElementById('sidebar').classList.toggle('closed', !sidebarOpen);
+  document.getElementById('sb-emoji').textContent  = sidebarOpen ? '◀' : '▶';
+  document.getElementById('sb-label').textContent  = sidebarOpen ? 'Hide Panel' : 'Show Panel';
+  document.getElementById('mini-hud').classList.toggle('visible', !sidebarOpen);
+  setTimeout(() => map && map.invalidateSize(), 320);
+}
+
+initMap();
+loadCrew();
+sendRequest();
+setInterval(sendRequest, 1000);
+setInterval(loadCrew, 60000);
+</script>
+</body>
+</html>
